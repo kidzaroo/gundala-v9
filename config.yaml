@@ -1,0 +1,146 @@
+# =============================================================================
+# Konfigurasi eksperimen deteksi DNS tunneling.
+# Nilai di sini menimpa default di src/config.py; argumen CLI menimpa nilai di sini.
+# =============================================================================
+
+random_seed: 42
+
+# Tandai asal data. Gunakan "synthetic_smoke_test" untuk data sintetis
+# (hasilnya BUKAN hasil penelitian). Bisa diisi lewat CLI: --synthetic
+data_origin: unspecified
+
+output_dir: outputs/experiment_01
+
+input:
+  benign_path: data/benign.json     # label 0
+  tunnel_path: data/tunnel.json     # label 1
+  format: auto                      # auto | jsonl | json_array
+  encoding: utf-8
+
+# Mapping field kanonik -> daftar nama kandidat di log (urutan = prioritas).
+# Nama bertitik (mis. id.orig_h) dicari sebagai kunci datar "id.orig_h"
+# lalu sebagai objek bersarang {"id": {"orig_h": ...}}.
+field_mapping:
+  timestamp: [ts]
+  src_ip: [id.orig_h]
+  dst_ip: [id.resp_h]
+  src_port: [id.orig_p]
+  dst_port: [id.resp_p]
+  proto: [proto]
+  query: [query]
+  qtype: [qtype]
+  qtype_name: [qtype_name]
+  rcode: [rcode]
+  rcode_name: [rcode_name]
+  answers: [answers]
+  ttls: [TTLs, ttls]
+  rejected: [rejected]
+  aa: [AA]
+  tc: [TC]
+  rd: [RD]
+  ra: [RA]
+
+validation:
+  # Record tanpa field kanonik ini dianggap tidak valid.
+  required_fields: [timestamp]
+  # Jika fraksi record tidak valid melebihi nilai ini, program berhenti
+  # (biasanya berarti format/mapping salah).
+  max_invalid_fraction: 0.5
+
+dedupe:
+  enabled: true        # hapus record identik SEBELUM split (dilaporkan)
+
+domain:
+  # false: eTLD+1 memakai bagian ICANN dari Public Suffix List (default).
+  # true : sufiks privat (github.io, dll.) juga dianggap public suffix.
+  include_private_suffixes: false
+  # Sufiks lokal; SLD = satu label di kiri sufiks + sufiks.
+  local_suffixes: [local, lan, home, internal, localdomain, corp, intranet, home.arpa]
+
+split:
+  strategy: stratified_random    # stratified_random | chronological
+  test_size: 0.30
+  chronological_mode: global     # global | per_class (hanya untuk chronological)
+  manifest_path: null            # jika diisi, pakai manifest split yang sudah ada
+
+features:
+  include_categorical: true      # qtype / rcode / proto (one-hot)
+
+windows:
+  sizes: [5, 10, 15, 30, 60]     # detik
+  # split_isolated : window train hanya dari train, window test hanya dari test (utama)
+  # train_carryover: EKSPERIMEN TAMBAHAN, hanya untuk split chronological
+  history_policy: split_isolated
+
+run_baseline: true
+
+balancing:
+  method: random_oversampling    # none | random_oversampling | smote | smotenc
+  sampling_strategy: auto        # auto | minority | "not majority" | rasio float (mis. 0.5)
+  smote_k_neighbors: 5
+  class_weight: none             # none | balanced
+  allow_class_weight_with_resampling: false
+
+models:
+  enabled: [random_forest, lightgbm, xgboost, mlp]
+  params:
+    random_forest:
+      n_estimators: 200
+      max_depth: null
+      min_samples_leaf: 1
+    lightgbm:
+      n_estimators: 300
+      learning_rate: 0.05
+      num_leaves: 31
+      min_child_samples: 20
+      subsample: 0.8
+      subsample_freq: 1
+      colsample_bytree: 0.8
+    xgboost:
+      n_estimators: 300
+      learning_rate: 0.1
+      max_depth: 6
+      subsample: 0.8
+      colsample_bytree: 0.8
+    mlp:
+      hidden_layer_sizes: [128, 64]
+      activation: relu
+      alpha: 0.0001
+      batch_size: 256
+      learning_rate_init: 0.001
+      max_iter: 200
+      early_stopping: false
+      n_iter_no_change: 10
+
+threshold:
+  mode: fixed                    # fixed | validation_f1
+  value: 0.5                     # dipakai jika mode=fixed
+  validation_size: 0.2           # porsi dari TRAIN untuk memilih threshold (validation_f1)
+
+tuning:
+  enabled: false                 # hanya cross-validation pada TRAIN
+  cv_folds: 3
+  n_iter: 6
+  scoring: average_precision
+  param_grids:
+    random_forest:
+      clf__n_estimators: [100, 200]
+      clf__max_depth: [null, 12, 24]
+      clf__min_samples_leaf: [1, 3]
+    lightgbm:
+      clf__num_leaves: [15, 31, 63]
+      clf__learning_rate: [0.03, 0.05, 0.1]
+    xgboost:
+      clf__max_depth: [4, 6, 8]
+      clf__learning_rate: [0.05, 0.1, 0.2]
+    mlp:
+      clf__hidden_layer_sizes: [[64], [128, 64], [128, 64, 32]]
+      clf__alpha: [0.0001, 0.001]
+
+runtime:
+  n_jobs: 1                      # worker untuk window paralel & thread model (-1 = semua core)
+
+outputs:
+  save_models: true
+  save_plots: true
+  top_k_importance: 20
