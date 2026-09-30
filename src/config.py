@@ -10,7 +10,9 @@ import yaml
 
 SUPPORTED_MODELS = ("random_forest", "lightgbm", "xgboost", "mlp")
 SUPPORTED_BALANCING = ("none", "random_oversampling", "smote", "smotenc")
-SUPPORTED_SPLITS = ("stratified_random", "chronological")
+SUPPORTED_SPLITS = ("stratified_random", "chronological", "group_sld")
+SUPPORTED_FEATURE_SETS = ("all", "query_only")
+SUPPORTED_ARTIFACT_POLICIES = ("exclude", "warn", "off")
 SUPPORTED_CHRONO_MODES = ("global", "per_class")
 SUPPORTED_HISTORY_POLICIES = ("split_isolated", "train_carryover")
 SUPPORTED_FORMATS = ("auto", "jsonl", "json_array")
@@ -63,7 +65,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "chronological_mode": "global",
         "manifest_path": None,
     },
-    "features": {"include_categorical": True},
+    "features": {
+        "include_categorical": True,
+        "feature_set": "all",
+        "exclude": [],
+        "schema_artifact_policy": "exclude",
+        "schema_artifact_threshold": 0.5,
+    },
     "windows": {"sizes": list(DEFAULT_WINDOWS), "history_policy": "split_isolated"},
     "run_baseline": True,
     "balancing": {
@@ -197,6 +205,14 @@ def validate_config(cfg: dict) -> dict:
     _require_in("input.format", cfg["input"]["format"], SUPPORTED_FORMATS)
     _require_in("split.strategy", cfg["split"]["strategy"], SUPPORTED_SPLITS)
     _require_in("split.chronological_mode", cfg["split"]["chronological_mode"], SUPPORTED_CHRONO_MODES)
+    _require_in("features.feature_set", cfg["features"]["feature_set"], SUPPORTED_FEATURE_SETS)
+    _require_in("features.schema_artifact_policy", cfg["features"]["schema_artifact_policy"],
+                SUPPORTED_ARTIFACT_POLICIES)
+    art_thr = float(cfg["features"]["schema_artifact_threshold"])
+    if not 0.0 < art_thr <= 1.0:
+        raise ValueError("features.schema_artifact_threshold must be in (0, 1].")
+    cfg["features"]["schema_artifact_threshold"] = art_thr
+    cfg["features"]["exclude"] = list(cfg["features"].get("exclude") or [])
     _require_in("windows.history_policy", cfg["windows"]["history_policy"], SUPPORTED_HISTORY_POLICIES)
     _require_in("balancing.method", cfg["balancing"]["method"], SUPPORTED_BALANCING)
     _require_in("balancing.class_weight", cfg["balancing"]["class_weight"], SUPPORTED_CLASS_WEIGHTS)

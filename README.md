@@ -26,7 +26,8 @@ Dokumen lanjutan: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) (definisi fitur, 
 | `answers` / `TTLs` | Field tidak ada sama sekali di dataset → fitur turunan `NaN`. Field ada tetapi unset pada suatu event (Zeek menghilangkan field unset) → 0 answers / 0 TTL. Statistik TTL dari list kosong = `NaN`, diimputasi dengan median **train**. |
 | SLD | Registrable domain (eTLD+1) via `tldextract` + Public Suffix List bawaan paket, tanpa jaringan (§6). |
 | Duplikat | Record dengan semua field kanonik identik **dan** label sama dihapus sebelum split; jumlahnya dilaporkan. Konten identik dengan label berbeda tidak dihapus, hanya dihitung (`label_conflict_events`). |
-| Split | Dihitung sekali, sebelum fitting/balancing apa pun. Manifest disimpan dan dipakai semua model & window. |
+| Split | Dihitung sekali, sebelum fitting/balancing apa pun. Manifest disimpan dan dipakai semua model & window. Strategi: `stratified_random` (default, optimistis untuk time series), `chronological` (`global`/`per_class`), dan `group_sld` (semua event satu SLD masuk satu subset; uji generalisasi ke domain baru dan tidak memotong grup window). Lihat `docs/METHODOLOGY.md` §3b. |
+| Audit artefak | Tiap run mengaudit (a) field yang ketersediaannya berbeda drastis antar kelas (hanya dari train) dan secara default membuang fitur turunannya, (b) AUC satu-fitur, kemurnian kategori, vektor fitur identik train/test, dan tumpang-tindih query/SLD. Hasil di `dataset_summary.json` dan `RUN_NOTES.md`. Ablasi: `--feature-set query_only`, `--exclude-features`. |
 | Balancing | Default `random_oversampling`, di dalam `imblearn.Pipeline`, hanya pada matriks fitur train (setelah fitur window terbentuk). |
 | Kategorikal & SMOTENC | Kategorikal di-encode ordinal → sampler → one-hot, sehingga SMOTENC menghasilkan kategori valid. Kategori baru di test → kode `-1` → vektor one-hot nol. |
 | SMOTE biasa | Tidak kompatibel dengan kategorikal nominal → **error informatif** (pakai `smotenc`, atau `features.include_categorical: false`). Flag biner 0/1 diperlakukan numerik oleh `smote` (nilai sintetis bisa pecahan; keterbatasan) dan sebagai kategorikal oleh `smotenc`. `k_neighbors` diperkecil otomatis bila minoritas sedikit; error bila < 2 sampel minoritas. |
@@ -74,7 +75,8 @@ dns_tunneling_detection/
 │   ├── domain_utils.py         # normalisasi, eTLD+1, subdomain, kasus khusus
 │   ├── feature_extraction.py   # fitur per-event + definisi matematis
 │   ├── window_features.py      # trailing window (deque), streaming extractor
-│   ├── split.py                # dedupe, split, manifest
+│   ├── split.py                # dedupe, split (stratified/chronological/group_sld), manifest
+│   ├── feature_policy.py       # feature_set/exclude, audit artefak skema & kebocoran
 │   ├── preprocessing.py        # ColumnTransformer, sampler (ROS/SMOTE/SMOTENC)
 │   ├── models.py               # classifier + imblearn Pipeline
 │   ├── evaluation.py           # metrik, threshold validasi, plot
@@ -117,15 +119,19 @@ python main.py --benign data/synthetic/benign.json --tunnel data/synthetic/tunne
 --models random_forest xgboost --windows 10 30
 --windows                      # tanpa nilai: baseline saja
 --skip-baseline
---split-strategy chronological
+--split-strategy chronological --chronological-mode per_class   # bila kedua file beda periode rekam
+--split-strategy group_sld                                      # uji ke domain yang belum pernah dilihat
+--feature-set query_only                                        # ablasi: tanpa fitur respons/protokol
+--exclude-features num_ttls qtype_cat win_ttl_mean              # buang fitur tertentu
+--schema-artifact-policy warn                                   # exclude (default) | warn | off
 --split-strategy chronological --window-history-policy train_carryover --output outputs/experiment_01_carryover
 --split-manifest outputs/experiment_01/split_manifest.csv
 
 pytest -q                      # semua test
 ```
 
-Opsi CLI: `--benign --tunnel --config --output --input-format --split-strategy --test-size --random-seed --split-manifest
---balancing --sampling-strategy --models --windows --skip-baseline --window-history-policy --n-jobs --synthetic --overwrite --log-level`.
+Opsi CLI: `--benign --tunnel --config --output --input-format --split-strategy --chronological-mode --test-size --random-seed --split-manifest
+--feature-set --exclude-features --schema-artifact-policy --balancing --sampling-strategy --models --windows --skip-baseline --window-history-policy --n-jobs --synthetic --overwrite --log-level`.
 Prioritas konfigurasi: default kode < `config.yaml` < argumen CLI. Direktori output yang tidak kosong ditolak kecuali `--overwrite`.
 
 Default: `test_size=0.30`, `random_seed=42`, `split_strategy=stratified_random`, `balancing=random_oversampling`,

@@ -63,8 +63,11 @@ Implementasi online `StreamingWindowFeatureExtractor` memakai kelas `GroupWindow
 Konsekuensi:
 
 * Pemisahan ini mencegah pencampuran event train/test dalam agregasi (tidak ada event test yang ikut membentuk fitur train, atau sebaliknya).
-* Pada **stratified random split**, pemisahan mengambil event secara acak dari deret waktu, sehingga *history* window di tiap subset **tidak lengkap**: sekitar 30% event tetangga (untuk test) atau 70% (untuk train) hilang dari setiap window.
-  Distribusi fitur window pada train dan test kira-kira sama (keduanya "menipis" serupa), tetapi berbeda dari deployment streaming, dengan history lengkap.
+* Pada **stratified random split**, pemisahan mengambil event secara acak dari deret waktu, sehingga *history* window di tiap subset **tidak lengkap**.
+  Train hanya mempertahankan ~70% event tetangga di setiap window, sedangkan test hanya ~30%. Akibatnya fitur berbasis hitungan (`win_count`, `win_query_rate`, `win_unique_*`, `win_nxdomain_count`)
+  pada test secara sistematis sekitar 0,43× nilai pada train: **pergeseran distribusi train→test yang merupakan artefak split**, dan berbeda dari deployment dengan history lengkap.
+  Pergeseran ini hanya mengenai pendekatan B (window), bukan baseline, sehingga perbandingan A vs B di bawah stratified random split ikut terdistorsi.
+* **`group_sld` tidak mengalami masalah ini**: kunci grup window adalah `(src_ip, SLD)`, dan split per SLD tidak pernah memotong satu grup window. Fitur window tiap subset identik dengan yang dihitung pada aliran penuh.
 * Karena itu, hasil stratified random split **tidak boleh diklaim sebagai simulasi deployment streaming**.
 
 **Opsi chronological split.** Default tetap menghitung window terpisah pada train dan test.
@@ -81,6 +84,27 @@ informatif; gunakan `split.chronological_mode: per_class` (pembagian kronologis 
 * Oversampling dilakukan pada matriks fitur **setelah** fitur window terbentuk. Tidak ada event sintetis/duplikat yang masuk ke perhitungan window (itu akan mengubah pola trafik).
 * Tuning (opsional) dan pemilihan threshold (opsional) hanya memakai train; resampling berada di dalam fold CV.
 * Hanya satu manifest split untuk semua 24 konfigurasi.
+
+## 3b. Strategi split: kapan memakai yang mana
+
+| Strategi | Mengukur | Kelemahan |
+|---|---|---|
+| `stratified_random` | generalisasi i.i.d. (optimistis untuk time series) | near-duplicate & domain berulang di train/test; window train/test menipis berbeda (lihat §3) |
+| `chronological` (`global` / `per_class`) | generalisasi temporal; window tetap utuh | bila sesi tunneling sedikit, test hanya memuat 1–2 sesi (varians besar); `global` gagal bila kedua file direkam di periode berbeda |
+| `group_sld` | generalisasi ke **domain yang belum pernah dilihat**; window tidak terpotong | butuh beberapa SLD per kelas; bila satu kelas hanya punya sedikit SLD, fraksi test kelas itu bisa melebihi target (warning) atau split gagal dengan pesan jelas |
+
+Rekomendasi: laporkan `chronological` (`per_class` bila periode rekam berbeda) dan `group_sld` sebagai hasil utama; `stratified_random` hanya sebagai pembanding optimistis.
+
+## 3c. Audit artefak dan kebocoran (`src/feature_policy.py`)
+
+Skor mendekati sempurna perlu dijelaskan, bukan dirayakan. Setiap run menulis ke `dataset_summary.json` dan `RUN_NOTES.md`:
+
+* `schema_artifact_audit`: proporsi field terisi per kelas, dihitung **hanya pada train**. Field dengan selisih ≥ `features.schema_artifact_threshold` (default 0,5) ditandai; bila `schema_artifact_policy=exclude` (default) fitur turunannya dibuang dari train *dan* test. Alasannya: jika `answers`/`TTLs`/flag hanya ada pada satu file, keberadaan field itu membedakan kelas karena setup perekaman, bukan perilaku.
+* `leakage_audit`: AUC satu-fitur dan kemurnian kategori (train saja); proporsi event test yang vektor fiturnya identik dengan event train; vektor fitur berlabel ganda; tumpang-tindih query dan SLD test-di-train; ditambah daftar peringatan.
+* Ablasi: `features.feature_set=query_only` membuang semua fitur turunan respons/protokol (TTL, answers, rcode/NXDOMAIN, qtype, proto, flag, dst IP, dan agregat window turunannya); `features.exclude` membuang fitur tertentu. Keputusan tiap fitur yang dibuang tercatat di `feature_schema.json → features_dropped_by_policy`.
+
+Interpretasi: bila skor tetap ~1 pada `query_only` + `group_sld`/`chronological`, datasetnya memang mudah dipisahkan secara leksikal (hasil sah tetapi tidak informatif untuk trafik nyata). Bila skor turun drastis, sebelumnya skor dipengaruhi artefak atau memorisasi.
+Audit ini diagnostik: hasilnya tidak dipakai untuk memilih model atau threshold.
 
 ## 4. Metrik dan pelaporan
 

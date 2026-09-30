@@ -4,6 +4,11 @@ All of this happens BEFORE any augmentation, balancing, fitted encoding/scaling,
 imputation or feature selection. The split is computed once and reused by every
 classifier and every window size.
 
+``group_sld`` keeps every event of a registrable domain (SLD) on ONE side of the split, so the
+test set measures generalisation to *unseen domains*. Because the window grouping key is
+``(src_ip, SLD)``, no window group is ever cut in two: window features of each subset are
+identical to those computed on the full stream (no thinning of history).
+
 Limitations of ``stratified_random``
 ------------------------------------
 Random stratified splitting assumes events are i.i.d. DNS traffic is not: queries of the
@@ -26,6 +31,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from .data_loader import class_distribution
+from .domain_utils import get_registrable_domain
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +85,44 @@ def _check_both_classes(train: pd.DataFrame, test: pd.DataFrame, strategy: str) 
             raise ValueError(
                 f"The {name} subset has classes {sorted(present)} after '{strategy}' split; both "
                 "classes are required. If benign.json and tunnel.json were captured in different "
-                "time ranges, use split.chronological_mode=per_class or a stratified_random split."
+                "time ranges, use split.chronological_mode=per_class or a stratified_random split. "
+                "For group_sld the dataset needs several distinct SLDs per class."
             )
+
+
+def _group_sld_test_mask(df: pd.DataFrame, test_size: float, random_seed: int) -> np.ndarray:
+    """Boolean mask of test events: whole SLD groups are assigned to the test subset.
+
+    Groups are visited in a seeded random order and added to the test set while neither class
+    would exceed ``test_size`` of its events (greedy, per-class target). If a class would get no
+    test event at all (few/huge domains), the smallest group containing that class is moved to
+    test (a warning is logged because the test fraction of that class then exceeds the target).
+    """
+    slds = df["query"].map(get_registrable_domain)
+    counts = pd.crosstab(slds, df["label"]).reindex(columns=[0, 1], fill_value=0)
+    names = counts.index.to_numpy()
+    c = {0: counts[0].to_numpy(), 1: counts[1].to_numpy()}
+    target = {lbl: test_size * float(c[lbl].sum()) for lbl in (0, 1)}
+    got = {0: 0, 1: 0}
+    chosen = np.zeros(len(names), dtype=bool)
+    rng = np.random.default_rng(random_seed)
+    for i in rng.permutation(len(names)):
+        if got[0] + c[0][i] <= target[0] and got[1] + c[1][i] <= target[1]:
+            chosen[i] = True
+            got[0] += int(c[0][i])
+            got[1] += int(c[1][i])
+    for lbl in (0, 1):
+        if got[lbl] == 0:
+            candidates = np.where((c[lbl] > 0) & ~chosen)[0]
+            if len(candidates):
+                pick = candidates[np.argmin(c[lbl][candidates])]
+                chosen[pick] = True
+                got[0] += int(c[0][pick])
+                got[1] += int(c[1][pick])
+                logger.warning(
+                    "group_sld: class %d would have no test events; moved SLD '%s' (%d events) to test "
+                    "(class test fraction exceeds %.0f%%).", lbl, names[pick], int(c[lbl][pick]), 100 * test_size)
+    return slds.isin(set(names[chosen])).to_numpy()
 
 
 def _chronological_order(df: pd.DataFrame) -> pd.DataFrame:
@@ -103,6 +145,10 @@ def split_events(
         )
         train = df.iloc[np.sort(train_pos)].reset_index(drop=True)
         test = df.iloc[np.sort(test_pos)].reset_index(drop=True)
+    elif strategy == "group_sld":
+        mask = _group_sld_test_mask(df, test_size, random_seed)
+        train = df.loc[~mask].reset_index(drop=True)
+        test = df.loc[mask].reset_index(drop=True)
     elif strategy == "chronological":
         if chronological_mode == "global":
             ordered = _chronological_order(df)

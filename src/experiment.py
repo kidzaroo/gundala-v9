@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
+from typing import Optional
 
 import joblib
 import numpy as np
@@ -47,10 +48,12 @@ from .evaluation import (
     select_threshold_on_validation,
     transform_before_classifier,
 )
-from .feature_extraction import (
-    FORBIDDEN_FEATURE_COLUMNS,
-    add_event_features,
-    get_event_feature_groups,
+from .feature_extraction import FORBIDDEN_FEATURE_COLUMNS, add_event_features
+from .feature_policy import (
+    FeatureSelection,
+    leakage_audit,
+    resolve_feature_selection,
+    schema_artifact_audit,
 )
 from .models import build_pipeline, resolve_class_weight_policy
 from .preprocessing import get_final_feature_names
@@ -134,14 +137,13 @@ def _experiment_id(approach: str, window: int, model: str) -> str:
     return f"{approach}_w{int(window):02d}_{model}"
 
 
-def _feature_groups_for(approach: str, include_categorical: bool) -> tuple[list[str], list[str], list[str]]:
-    cont, binary, cat = get_event_feature_groups(include_categorical)
-    if approach == "sliding_window":
-        cont = cont + WINDOW_FEATURE_COLUMNS
-    overlap = FORBIDDEN_FEATURE_COLUMNS & set(cont + binary + cat)
-    if overlap:  # defensive: metadata must never become a feature
-        raise AssertionError(f"Forbidden metadata used as features: {sorted(overlap)}")
-    return cont, binary, cat
+def _select_features(cfg: dict, approach: str, artifact_fields: list[str]) -> FeatureSelection:
+    """Feature lists for one approach after the configured feature policy."""
+    f = cfg["features"]
+    return resolve_feature_selection(
+        approach, include_categorical=bool(f["include_categorical"]), feature_set=f["feature_set"],
+        exclude=f["exclude"], excluded_fields=artifact_fields,
+    )
 
 
 def run_single_experiment(
@@ -161,6 +163,7 @@ def run_single_experiment(
     experiment_dir: Path,
     history_policy: str,
     n_jobs: int,
+    dropped_features: Optional[dict] = None,
 ) -> dict:
     """Fit on TRAIN, evaluate on TEST, save all artefacts of one configuration."""
     seed = cfg["random_seed"]
@@ -280,6 +283,7 @@ def run_single_experiment(
         "input_feature_order": continuous + binary + categorical,
         "transformed_feature_names": feature_names,
         "features_entirely_missing_in_train": all_missing,
+        "features_dropped_by_policy": dropped_features or {},
         "metadata_never_used_as_features": sorted(FORBIDDEN_FEATURE_COLUMNS),
         "note": "Window features require per-(src_ip, SLD) event history at inference; that state "
                 "is NOT stored in the model artifact.",
@@ -337,15 +341,22 @@ def build_event_tables(train_raw: pd.DataFrame, test_raw: pd.DataFrame, availabi
     return EventTables(train, test, fe_train, fe_test)
 
 
-def _write_run_notes(cfg: dict, out: Path) -> None:
+def _write_run_notes(cfg: dict, out: Path, artifact_fields: list[str], audit_warnings: list[str]) -> None:
+    feats = cfg["features"]
     lines = [
         "# Run notes", "",
         f"* data_origin: `{cfg['data_origin']}`",
         f"* split strategy: `{cfg['split']['strategy']}` (test_size={cfg['split']['test_size']}, seed={cfg['random_seed']})",
         f"* window history policy: `{cfg['windows']['history_policy']}`",
         f"* balancing: `{cfg['balancing']['method']}` (sampling_strategy={cfg['balancing']['sampling_strategy']})",
-        f"* threshold mode: `{cfg['threshold']['mode']}`", "",
+        f"* threshold mode: `{cfg['threshold']['mode']}`",
+        f"* feature_set: `{feats['feature_set']}`, excluded by user: {feats['exclude']}",
+        f"* schema-artefact policy: `{feats['schema_artifact_policy']}` "
+        f"(threshold {feats['schema_artifact_threshold']}); flagged fields: {artifact_fields or 'none'}", "",
     ]
+    if audit_warnings:
+        lines += ["## Leakage / artefact audit warnings (see dataset_summary.json)", ""]
+        lines += [f"* {w}" for w in audit_warnings] + [""]
     if cfg["data_origin"] != "unspecified":
         lines += [f"> **Data origin = {cfg['data_origin']}.** If this is synthetic/smoke-test data, "
                   "the numbers are examples of the pipeline running, NOT research results.", ""]
@@ -363,6 +374,7 @@ def _write_run_notes(cfg: dict, out: Path) -> None:
 def run_experiments(cfg: dict, overwrite: bool = False) -> pd.DataFrame:
     """Run all configured experiments and return the results table."""
     cfg = validate_config(cfg)
+    _select_features(cfg, "sliding_window", [])  # fail early on invalid feature policy
     out = Path(cfg["output_dir"])
     _prepare_output_dir(out, overwrite)
     seed = cfg["random_seed"]
@@ -402,12 +414,28 @@ def run_experiments(cfg: dict, overwrite: bool = False) -> pd.DataFrame:
                                     cfg["split"]["test_size"], seed)
     logger.info("Split: train=%s test=%s", split_summary["train"], split_summary["test"])
 
+    # 3b. schema-artefact audit (TRAIN only) -> fields whose features are dropped
+    artifact_report = schema_artifact_audit(train_raw, cfg["features"]["schema_artifact_threshold"])
+    policy = cfg["features"]["schema_artifact_policy"]
+    flagged = list(artifact_report["flagged_fields"])
+    artifact_fields = flagged if policy == "exclude" else []
+    if flagged and policy != "off":
+        logger.warning(
+            "Schema artefact: field presence differs drastically between classes for %s. Policy=%s%s",
+            flagged, policy, " -> derived features excluded" if policy == "exclude" else "",
+        )
+    artifact_report["policy"] = policy
+    artifact_report["fields_excluded"] = artifact_fields
+
     # 4. per-event features ---------------------------------------------------
     tables = build_event_tables(train_raw, test_raw, availability)
     y_train = tables.train["label"].to_numpy()
     y_test = tables.test["label"].to_numpy()
     test_ids = tables.test["event_id"].to_numpy()
 
+    base_sel = _select_features(cfg, "baseline", artifact_fields)
+    audit = leakage_audit(tables.train, tables.test, base_sel.continuous, base_sel.binary,
+                          base_sel.categorical)
     kinds = pd.concat([tables.train["domain_kind"], tables.test["domain_kind"]]).value_counts().to_dict()
     n_groups = int(pd.concat([tables.train, tables.test]).groupby(["src_ip", "sld"]).ngroups)
     dump_json({
@@ -424,10 +452,22 @@ def run_experiments(cfg: dict, overwrite: bool = False) -> pd.DataFrame:
         "domain_kind_counts": kinds,
         "n_src_ip_sld_groups": n_groups,
         "suffix_list": suffix_list_info(),
-        "split_limitations": "Stratified random split ignores temporal dependence and repeated domains; "
-                             "see README. Window features are computed separately on train and test.",
+        "feature_policy": {
+            "feature_set": cfg["features"]["feature_set"], "exclude": cfg["features"]["exclude"],
+            "include_categorical": cfg["features"]["include_categorical"],
+            "dropped_baseline": base_sel.dropped,
+        },
+        "schema_artifact_audit": artifact_report,
+        "leakage_audit": audit,
+        "split_limitations": {
+            "stratified_random": "ignores temporal dependence and repeated domains; window history is "
+                                 "thinned differently in train (~70%) and test (~30%).",
+            "group_sld": "measures generalisation to unseen SLDs; needs several SLDs per class.",
+            "chronological": "measures temporal generalisation; classes recorded in different periods "
+                             "need chronological_mode=per_class.",
+        }[cfg["split"]["strategy"]],
     }, out / "dataset_summary.json")
-    _write_run_notes(cfg, out)
+    _write_run_notes(cfg, out, artifact_fields, audit["warnings"])
 
     # 5. window features ------------------------------------------------------
     windows = list(cfg["windows"]["sizes"])
@@ -448,20 +488,18 @@ def run_experiments(cfg: dict, overwrite: bool = False) -> pd.DataFrame:
         configs.append(("baseline", 0))
     configs += [("sliding_window", w) for w in windows]
 
-    include_cat = bool(cfg["features"]["include_categorical"])
     rows: list[dict] = []
     for approach, w in configs:
-        groups = _feature_groups_for(approach, include_cat)
-        ev_cont, ev_bin, ev_cat = get_event_feature_groups(include_cat)
-        event_cols = ev_cont + ev_bin + ev_cat
-        X_train = tables.train[event_cols]
-        X_test = tables.test[event_cols]
+        sel = _select_features(cfg, approach, artifact_fields)
+        groups = (sel.continuous, sel.binary, sel.categorical)
+        X_train = tables.train[sel.event_columns]
+        X_test = tables.test[sel.event_columns]
         fe_seconds = tables.fe_train_seconds + tables.fe_test_seconds
         fe_test_seconds = tables.fe_test_seconds
         if approach == "sliding_window":
             wd = window_data[w]
-            X_train = pd.concat([X_train, wd["train"]], axis=1)
-            X_test = pd.concat([X_test, wd["test"]], axis=1)
+            X_train = pd.concat([X_train, wd["train"][sel.window_columns]], axis=1)
+            X_test = pd.concat([X_test, wd["test"][sel.window_columns]], axis=1)
             fe_seconds += wd["seconds_train"] + wd["seconds_test"]
             fe_test_seconds += wd["seconds_test"]
         for model_name in cfg["models"]["enabled"]:
@@ -472,7 +510,7 @@ def run_experiments(cfg: dict, overwrite: bool = False) -> pd.DataFrame:
                 X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test,
                 test_event_ids=test_ids, groups=groups, fe_seconds=fe_seconds,
                 fe_test_seconds=fe_test_seconds, experiment_dir=exp_dir,
-                history_policy=history_policy, n_jobs=n_jobs,
+                history_policy=history_policy, n_jobs=n_jobs, dropped_features=sel.dropped,
             )
             rows.append(row)
             logger.info("  f1=%.4f recall=%.4f fpr=%.4f roc_auc=%s", row["f1"], row["recall"],

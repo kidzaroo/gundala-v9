@@ -15,7 +15,10 @@ import sys
 import pandas as pd
 
 from src.config import (
+    SUPPORTED_ARTIFACT_POLICIES,
     SUPPORTED_BALANCING,
+    SUPPORTED_CHRONO_MODES,
+    SUPPORTED_FEATURE_SETS,
     SUPPORTED_HISTORY_POLICIES,
     SUPPORTED_MODELS,
     SUPPORTED_SPLITS,
@@ -37,9 +40,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", help="Output directory (must be new/empty unless --overwrite).")
     p.add_argument("--input-format", choices=["auto", "jsonl", "json_array"], help="Override format detection.")
     p.add_argument("--split-strategy", choices=SUPPORTED_SPLITS, help="Default: stratified_random.")
+    p.add_argument("--chronological-mode", choices=SUPPORTED_CHRONO_MODES,
+                   help="For chronological split: global | per_class (use when the two files cover different periods).")
     p.add_argument("--test-size", type=float, help="Default: 0.30.")
     p.add_argument("--random-seed", type=int, help="Default: 42.")
     p.add_argument("--split-manifest", help="Reuse an existing split_manifest.csv.")
+    p.add_argument("--feature-set", choices=SUPPORTED_FEATURE_SETS,
+                   help="all | query_only (drop response/protocol-derived features; ablation against artefacts).")
+    p.add_argument("--exclude-features", nargs="+", metavar="FEATURE",
+                   help="Feature names to drop (event or window features), e.g. num_ttls qtype_cat.")
+    p.add_argument("--schema-artifact-policy", choices=SUPPORTED_ARTIFACT_POLICIES,
+                   help="Fields present in one class but not the other: exclude (default) | warn | off.")
     p.add_argument("--balancing", choices=SUPPORTED_BALANCING, help="Default: random_oversampling.")
     p.add_argument("--sampling-strategy", help="auto | minority | 'not majority' | float ratio (e.g. 0.5).")
     p.add_argument("--models", nargs="+", choices=SUPPORTED_MODELS, help="Classifiers to run.")
@@ -68,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
         "output_dir": args.output,
         "split.strategy": args.split_strategy,
         "split.test_size": args.test_size,
+        "split.chronological_mode": args.chronological_mode,
+        "features.feature_set": args.feature_set,
+        "features.exclude": args.exclude_features,
+        "features.schema_artifact_policy": args.schema_artifact_policy,
         "split.manifest_path": args.split_manifest,
         "random_seed": args.random_seed,
         "balancing.method": args.balancing,

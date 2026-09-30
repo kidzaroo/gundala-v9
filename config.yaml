@@ -58,13 +58,23 @@ domain:
   local_suffixes: [local, lan, home, internal, localdomain, corp, intranet, home.arpa]
 
 split:
-  strategy: stratified_random    # stratified_random | chronological
+  # stratified_random: acak berstrata (optimistis untuk data time series; lihat docs/METHODOLOGY.md)
+  # chronological     : berdasarkan waktu (uji generalisasi temporal)
+  # group_sld         : semua event satu SLD masuk satu subset (uji generalisasi ke domain baru;
+  #                     grup window (src_ip, SLD) tidak terpotong)
+  strategy: chronological
   test_size: 0.30
-  chronological_mode: global     # global | per_class (hanya untuk chronological)
+  chronological_mode: per_class     # global | per_class (hanya untuk chronological)
   manifest_path: null            # jika diisi, pakai manifest split yang sudah ada
 
 features:
   include_categorical: true      # qtype / rcode / proto (one-hot)
+  feature_set: all               # all | query_only (tanpa fitur turunan respons/protokol)
+  exclude: []                    # nama fitur yang dibuang, mis. [num_ttls, qtype_cat, win_ttl_mean]
+  # Field yang ketersediaannya berbeda drastis antar kelas (dihitung pada TRAIN saja) dianggap artefak
+  # perekaman: exclude = fitur turunannya dibuang | warn = hanya peringatan | off = abaikan
+  schema_artifact_policy: exclude
+  schema_artifact_threshold: 0.5 # selisih proporsi field-terisi antar kelas yang ditandai
 
 windows:
   sizes: [5, 10, 15, 30, 60]     # detik
