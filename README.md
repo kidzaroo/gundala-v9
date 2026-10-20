@@ -5,8 +5,8 @@ Proyek Python yang modular dan reproducible untuk membandingkan dua pendekatan p
 * **A. Baseline**: klasifikasi per DNS event, tanpa sliding window.
 * **B. Sliding window**: fitur per-event **ditambah** agregasi trailing-window per `(src_ip, SLD)` untuk W ∈ {5, 10, 15, 30, 60} detik.
 
-Empat classifier yang sama (Random Forest, LightGBM, XGBoost, MLP) dipakai pada kedua pendekatan:
-4 baseline + 4 × 5 window = **24 konfigurasi utama**.
+Lima classifier yang sama (Random Forest, LightGBM, XGBoost, MLP, Logistic Regression) dipakai pada kedua pendekatan:
+5 baseline + 5 × 5 window = **30 konfigurasi utama**.
 
 > **Peringatan.** Angka apa pun yang berasal dari `src/synthetic_data.py` adalah *contoh smoke test*, **bukan hasil penelitian**.
 > Repo ini tidak memuat hasil/metrik penelitian.
@@ -32,7 +32,7 @@ Dokumen lanjutan: [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) (definisi fitur, 
 | Kategorikal & SMOTENC | Kategorikal di-encode ordinal → sampler → one-hot, sehingga SMOTENC menghasilkan kategori valid. Kategori baru di test → kode `-1` → vektor one-hot nol. |
 | SMOTE biasa | Tidak kompatibel dengan kategorikal nominal → **error informatif** (pakai `smotenc`, atau `features.include_categorical: false`). Flag biner 0/1 diperlakukan numerik oleh `smote` (nilai sintetis bisa pecahan; keterbatasan) dan sebagai kategorikal oleh `smotenc`. `k_neighbors` diperkecil otomatis bila minoritas sedikit; error bila < 2 sampel minoritas. |
 | Class weight | Default `none`. `class_weight` + oversampling **ditolak** kecuali `balancing.allow_class_weight_with_resampling: true`. MLP tidak punya `class_weight` (diabaikan dan dicatat). |
-| Scaling | Untuk MLP, dan untuk model lain hanya bila balancing = `smote`/`smotenc` (jarak kNN butuh skala sebanding). Di-fit pada train. |
+| Scaling | Untuk MLP dan Logistic Regression, dan untuk model lain hanya bila balancing = `smote`/`smotenc` (jarak kNN butuh skala sebanding). Di-fit pada train. |
 | Threshold | Default tetap 0.5. `threshold.mode: validation_f1` memilih threshold pada validation split **dari train**. Test tidak dipakai. |
 | Tuning | Opsional (`tuning.enabled`): `RandomizedSearchCV` pada train, seluruh pipeline (termasuk resampling) di dalam fold. Default nonaktif. |
 | Seed | `random_seed=42` untuk split, sampler, dan semua classifier. |
@@ -104,7 +104,7 @@ Untuk reproduksi ketat, simpan versi (`pip freeze > requirements.lock`); setiap 
 ## 5. Menjalankan
 
 ```bash
-# Data riil: 24 konfigurasi dengan default
+# Data riil: 30 konfigurasi dengan default
 python main.py --benign data/benign.json --tunnel data/tunnel.json \
                --config config.yaml --output outputs/experiment_01
 
@@ -135,7 +135,7 @@ Opsi CLI: `--benign --tunnel --config --output --input-format --split-strategy -
 Prioritas konfigurasi: default kode < `config.yaml` < argumen CLI. Direktori output yang tidak kosong ditolak kecuali `--overwrite`.
 
 Default: `test_size=0.30`, `random_seed=42`, `split_strategy=stratified_random`, `balancing=random_oversampling`,
-`windows=[5,10,15,30,60]`, `models=[random_forest, lightgbm, xgboost, mlp]`.
+`windows=[5,10,15,30,60]`, `models=[random_forest, lightgbm, xgboost, mlp, logistic_regression]`.
 `--n-jobs` dipakai untuk menghitung window secara paralel dan untuk thread model.
 
 ## 6. SLD untuk grouping

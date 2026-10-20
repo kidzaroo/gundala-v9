@@ -55,7 +55,7 @@ from .feature_policy import (
     resolve_feature_selection,
     schema_artifact_audit,
 )
-from .models import build_pipeline, resolve_class_weight_policy
+from .models import SCALED_MODELS, build_pipeline, resolve_class_weight_policy
 from .preprocessing import get_final_feature_names
 from .split import (
     apply_manifest,
@@ -244,7 +244,7 @@ def run_single_experiment(
     before = getattr(sampler, "class_counts_before_", train_counts)
     after = getattr(sampler, "class_counts_after_", train_counts)
     feature_names = get_final_feature_names(pipeline, continuous, binary, categorical)
-    scaled = model_name == "mlp" or bal["method"] in ("smote", "smotenc")
+    scaled = model_name in SCALED_MODELS or bal["method"] in ("smote", "smotenc")
     all_missing = [c for c in continuous + binary + categorical if X_train[c].isna().all()]
 
     # -- artefacts

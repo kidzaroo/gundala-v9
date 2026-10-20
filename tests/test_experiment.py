@@ -42,23 +42,23 @@ def two_runs(tmp_path_factory, synthetic_files):
 
 def test_24_style_grid_and_columns(two_runs):
     cfg, res = two_runs[0]
-    # 4 classifiers x (baseline + 2 windows) in this reduced run
-    assert len(res) == 4 * 3
+    # 5 classifiers x (baseline + 2 windows) in this reduced run
+    assert len(res) == 5 * 3
     assert set(REQUIRED_COLUMNS) <= set(res.columns) and list(res.columns) == RESULT_COLUMNS
     base = res[res.approach == "baseline"]
-    assert (base.window_seconds == 0).all() and len(base) == 4
+    assert (base.window_seconds == 0).all() and len(base) == 5
     sw = res[res.approach == "sliding_window"]
     assert sorted(sw.window_seconds.unique()) == [5, 60]
-    assert set(res.model) == {"random_forest", "lightgbm", "xgboost", "mlp"}
+    assert set(res.model) == {"random_forest", "lightgbm", "xgboost", "mlp", "logistic_regression"}
     assert (res.split_strategy == "stratified_random").all()
     assert (res.balancing_method == "random_oversampling").all()
     assert res.experiment_id.is_unique
 
 
-def test_full_grid_size_is_24_for_default_windows():
+def test_full_grid_size_is_30_for_default_windows():
     cfg = validate_config(copy.deepcopy(DEFAULT_CONFIG))
     n = len(cfg["models"]["enabled"]) * (int(cfg["run_baseline"]) + len(cfg["windows"]["sizes"]))
-    assert n == 24
+    assert n == 30
 
 
 def test_same_split_for_all_models_and_windows(two_runs):

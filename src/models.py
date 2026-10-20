@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from imblearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
 
 from .preprocessing import build_sampler, make_expander, make_preprocessor
@@ -23,7 +24,11 @@ MODEL_LABELS = {
     "lightgbm": "LightGBM",
     "xgboost": "XGBoost",
     "mlp": "MLP",
+    "logistic_regression": "Logistic Regression",
 }
+
+# Models that always need standard-scaled continuous features.
+SCALED_MODELS = ("mlp", "logistic_regression")
 
 
 def resolve_class_weight_policy(balancing_method: str, class_weight: str, allow_both: bool) -> str:
@@ -86,6 +91,10 @@ def build_classifier(
             logger.warning("MLPClassifier has no class_weight support; 'balanced' is ignored for mlp.")
         p["hidden_layer_sizes"] = tuple(p.get("hidden_layer_sizes", (128, 64)))
         return MLPClassifier(random_state=random_seed, **p)
+    if name == "logistic_regression":
+        return LogisticRegression(
+            random_state=random_seed, class_weight="balanced" if class_weight == "balanced" else None, **p,
+        )
     raise ValueError(f"Unknown model {name!r}")
 
 
@@ -117,7 +126,7 @@ def build_pipeline(
     if cv_folds_for_sampler:
         n_min = max(int(n_min * (cv_folds_for_sampler - 1) / cv_folds_for_sampler), 1)
 
-    scale = model_name == "mlp" or method in ("smote", "smotenc")
+    scale = model_name in SCALED_MODELS or method in ("smote", "smotenc")
     prep = make_preprocessor(continuous, binary, categorical, scale=scale)
     sampler = build_sampler(
         method, balancing["sampling_strategy"], random_seed,

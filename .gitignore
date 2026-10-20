@@ -6,3 +6,5 @@ outputs/
 data/
 .DS_Store
 **/.DS_Store
+deploy/
+.claude

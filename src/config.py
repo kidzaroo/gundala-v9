@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional
 
 import yaml
 
-SUPPORTED_MODELS = ("random_forest", "lightgbm", "xgboost", "mlp")
+SUPPORTED_MODELS = ("random_forest", "lightgbm", "xgboost", "mlp", "logistic_regression")
 SUPPORTED_BALANCING = ("none", "random_oversampling", "smote", "smotenc")
 SUPPORTED_SPLITS = ("stratified_random", "chronological", "group_sld")
 SUPPORTED_FEATURE_SETS = ("all", "query_only")
@@ -99,6 +99,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "batch_size": 256, "learning_rate_init": 0.001, "max_iter": 200,
                 "early_stopping": False, "n_iter_no_change": 10,
             },
+            "logistic_regression": {"C": 1.0, "solver": "lbfgs", "max_iter": 1000},
         },
     },
     "threshold": {"mode": "fixed", "value": 0.5, "validation_size": 0.2},
@@ -119,6 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "clf__hidden_layer_sizes": [[64], [128, 64], [128, 64, 32]],
                 "clf__alpha": [0.0001, 0.001],
             },
+            "logistic_regression": {"clf__C": [0.01, 0.1, 1.0, 10.0]},
         },
     },
     "runtime": {"n_jobs": 1},

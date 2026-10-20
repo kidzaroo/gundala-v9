@@ -83,7 +83,7 @@ informatif; gunakan `split.chronological_mode: per_class` (pembagian kronologis 
 * Seluruh fitting (imputer, scaler, encoder, sampler, classifier) berada di dalam `imblearn.Pipeline` dan hanya memakai train; sampler tidak aktif saat `predict`/`transform`.
 * Oversampling dilakukan pada matriks fitur **setelah** fitur window terbentuk. Tidak ada event sintetis/duplikat yang masuk ke perhitungan window (itu akan mengubah pola trafik).
 * Tuning (opsional) dan pemilihan threshold (opsional) hanya memakai train; resampling berada di dalam fold CV.
-* Hanya satu manifest split untuk semua 24 konfigurasi.
+* Hanya satu manifest split untuk semua 30 konfigurasi.
 
 ## 3b. Strategi split: kapan memakai yang mana
 
